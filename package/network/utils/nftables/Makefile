@@ -10,7 +10,7 @@ PKG_VERSION:=1.1.1
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.xz
-PKG_SOURCE_URL:=https://netfilter.org/projects/$(PKG_NAME)/files
+PKG_SOURCE_URL:=https://raw.githubusercontent.com/michaelchen644/nftables-fullconenat/refs/heads/main
 PKG_HASH:=6358830f3a64f31e39b0ad421d7dadcd240b72343ded48d8ef13b8faf204865a
 
 PKG_MAINTAINER:=

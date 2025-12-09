@@ -342,7 +342,7 @@ Signed-off-by: P Praneesh <ppranees@codeaurora.org>
 +	int hal_ring_id = dp->tx_ring[ring_id].tcl_comp_ring.ring_id, count = 0, i = 0;
  	struct hal_srng *status_ring = &ab->hal.srng_list[hal_ring_id];
  	struct sk_buff *msdu;
- 	struct hal_tx_status ts = { 0 };
+ 	struct hal_tx_status ts = {};
  	struct dp_tx_ring *tx_ring = &dp->tx_ring[ring_id];
  	int valid_entries;
 -	u32 *desc;

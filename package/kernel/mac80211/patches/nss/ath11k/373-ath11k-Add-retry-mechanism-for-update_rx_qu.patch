@@ -194,7 +194,7 @@ Signed-off-by: Tamizh Chelvam Raja <quic_tamizhr@quicinc.com>
 +static int ath11k_dp_reo_cache_flush(struct ath11k_base *ab,
  				      struct dp_rx_tid *rx_tid)
  {
- 	struct ath11k_hal_reo_cmd cmd = {0};
+ 	struct ath11k_hal_reo_cmd cmd = {};
  	unsigned long tot_desc_sz, desc_sz;
  	int ret;
  
@@ -318,7 +318,7 @@ Signed-off-by: Tamizh Chelvam Raja <quic_tamizhr@quicinc.com>
  void ath11k_peer_rx_tid_delete(struct ath11k *ar,
  			       struct ath11k_peer *peer, u8 tid)
  {
--	struct ath11k_hal_reo_cmd cmd = {0};
+-	struct ath11k_hal_reo_cmd cmd = {};
  	struct dp_rx_tid *rx_tid = &peer->rx_tid[tid];
 -	int ret;
 +	struct dp_reo_update_rx_queue_elem *elem, *tmp;

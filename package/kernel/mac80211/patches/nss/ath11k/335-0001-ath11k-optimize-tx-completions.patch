@@ -62,9 +62,9 @@ Signed-off-by: Venkateswara Naralasetty <quic_vnaralas@quicinc.com>
 +				       struct hal_wbm_release_ring *tx_status,
 +				       enum hal_wbm_rel_src_module buf_rel_source)
  {
- 	struct ieee80211_tx_status status = { 0 };
- 	struct ieee80211_rate_status status_rate = { 0 };
-@@ -659,8 +692,11 @@ static void ath11k_dp_tx_complete_msdu(s
+ 	struct ieee80211_tx_status status = {};
+ 	struct ieee80211_rate_status status_rate = {};
+@@ -660,8 +693,11 @@ static void ath11k_dp_tx_complete_msdu(s
  	struct ath11k_peer *peer;
  	struct ath11k_sta *arsta;
  	struct rate_info rate;
@@ -205,18 +205,18 @@ Signed-off-by: Venkateswara Naralasetty <quic_vnaralas@quicinc.com>
  static inline bool ath11k_dp_tx_completion_valid(struct hal_wbm_release_ring *desc)
  {
  	struct htt_tx_wbm_completion *status_desc;
-@@ -820,9 +830,9 @@ void ath11k_dp_tx_completion_handler(str
+@@ -821,9 +831,9 @@ void ath11k_dp_tx_completion_handler(str
  	int hal_ring_id = dp->tx_ring[ring_id].tcl_comp_ring.ring_id, count = 0, i = 0;
  	struct hal_srng *status_ring = &ab->hal.srng_list[hal_ring_id];
  	struct sk_buff *msdu;
--	struct hal_tx_status ts = { 0 };
+-	struct hal_tx_status ts = {};
  	struct dp_tx_ring *tx_ring = &dp->tx_ring[ring_id];
  	int valid_entries;
 +	enum hal_wbm_rel_src_module buf_rel_source;
  	struct hal_wbm_release_ring *desc;
  	u32 msdu_id, desc_id;
  	u8 mac_id;
-@@ -863,14 +873,16 @@ void ath11k_dp_tx_completion_handler(str
+@@ -864,14 +874,16 @@ void ath11k_dp_tx_completion_handler(str
  
  	while (count--) {
  		tx_status = &tx_ring->tx_status[i++];

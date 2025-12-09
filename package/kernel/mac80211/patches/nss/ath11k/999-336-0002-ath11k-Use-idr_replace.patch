@@ -121,7 +121,7 @@ Signed-off-by: Tamizh Chelvam <quic_tamizhr@quicinc.com>
  	struct hal_reo_dest_ring *desc;
  	enum hal_reo_dest_ring_push_reason push_reason;
 +	u32 *rx_buf_id[MAX_RADIOS];
- 	u32 cookie, info0, rx_msdu_info0, rx_mpdu_info0;
+ 	u32 cookie;
  	int i;
  
 -	for (i = 0; i < MAX_RADIOS; i++)
@@ -172,14 +172,14 @@ Signed-off-by: Tamizh Chelvam <quic_tamizhr@quicinc.com>
  	}
  
  	return tot_n_bufs_reaped;
-@@ -5032,14 +5064,17 @@ int ath11k_dp_rx_process_wbm_err(struct
+@@ -5028,14 +5060,17 @@ int ath11k_dp_rx_process_wbm_err(struct
  	struct sk_buff *msdu;
  	struct sk_buff_head msdu_list[MAX_RADIOS];
  	struct ath11k_skb_rxcb *rxcb;
 +	u32 *wbm_err_buf_id[MAX_RADIOS];
  	u32 *rx_desc;
  	int buf_id, mac_id;
- 	int num_buffs_reaped[MAX_RADIOS] = {0};
+ 	int num_buffs_reaped[MAX_RADIOS] = {};
  	int total_num_buffs_reaped = 0;
  	int ret, i;
  

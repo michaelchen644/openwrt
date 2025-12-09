@@ -297,7 +297,7 @@ Signed-off-by: P Praneesh <ppranees@codeaurora.org>
 +	struct ath11k_skb_rxcb *rxcb;
  	struct sk_buff *msdu;
  	struct ath11k *ar;
- 	struct ieee80211_rx_status rx_status = {0};
+ 	struct ieee80211_rx_status rx_status = {};
  	int ret;
 +	bool fast_rx;
  

@@ -285,18 +285,18 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  		for (tid = 0; tid < ARRAY_SIZE(sta->sta.txq); tid++) {
  			if (!sta->sta.txq[tid] ||
  			    !(driver_release_tids & BIT(tid)) ||
-@@ -2597,7 +2612,7 @@ static void sta_set_tidstats(struct sta_
- 		tidstats->tx_msdu_failed = sta->deflink.status_stats.msdu_failed[tid];
+@@ -2666,7 +2681,7 @@ static void sta_set_tidstats(struct sta_
+ 			link_sta_info->status_stats.msdu_failed[tid];
  	}
  
--	if (tid < IEEE80211_NUM_TIDS) {
-+	if (!ieee80211_hw_check(&local->hw, HAS_TX_QUEUE) && tid < IEEE80211_NUM_TIDS) {
+-	if (link_id < 0 && tid < IEEE80211_NUM_TIDS) {
++	if (!ieee80211_hw_check(&local->hw, HAS_TX_QUEUE) && link_id < 0 && tid < IEEE80211_NUM_TIDS) {
  		spin_lock_bh(&local->fq.lock);
- 		rcu_read_lock();
  
+ 		tidstats->filled |= BIT(NL80211_TID_STATS_TXQ_STATS);
 --- a/net/mac80211/debugfs_sta.c
 +++ b/net/mac80211/debugfs_sta.c
-@@ -156,6 +156,9 @@ static ssize_t sta_aqm_read(struct file
+@@ -155,6 +155,9 @@ static ssize_t sta_aqm_read(struct file
  		       bufsz + buf - p,
  		       "tid ac backlog-bytes backlog-packets new-flows drops marks overlimit collisions tx-bytes tx-packets flags\n");
  
@@ -306,17 +306,17 @@ Signed-off-by: Yuvasree Sivasankaran <quic_ysivasan@quicinc.com>
  	for (i = 0; i < ARRAY_SIZE(sta->sta.txq); i++) {
  		if (!sta->sta.txq[i])
  			continue;
-@@ -180,6 +183,7 @@ static ssize_t sta_aqm_read(struct file
+@@ -179,6 +182,7 @@ static ssize_t sta_aqm_read(struct file
  			       test_bit(IEEE80211_TXQ_DIRTY, &txqi->flags) ? " DIRTY" : "");
  	}
  
 +skip_txq_info:
- 	rcu_read_unlock();
  	spin_unlock_bh(&local->fq.lock);
  
+ 	rv = simple_read_from_buffer(userbuf, count, ppos, buf, p - buf);
 --- a/net/mac80211/mesh.c
 +++ b/net/mac80211/mesh.c
-@@ -815,7 +815,8 @@ bool ieee80211_mesh_xmit_fast(struct iee
+@@ -818,7 +818,8 @@ bool ieee80211_mesh_xmit_fast(struct iee
  	if (!skb)
  		return true;
  

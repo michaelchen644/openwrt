@@ -12,7 +12,7 @@ PKG_VERSION_REAL:=2.12-01460
 PKG_VERSION:=$(subst -,.,$(PKG_VERSION_REAL))
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION_REAL).tar.zst
 PKG_SOURCE_URL:=https://github.com/qosmio/upstream-wifi-fw/releases/download/$(PKG_VERSION_REAL)
-PKG_HASH:=7705f630fbd645b798cf6c7b3d5384068b6bcc28493a274ad09ec8e6d239e424
+PKG_HASH:=a2767b367a51e15c1ab4d303113a0d1e22e73adf727a418119f4509f0ef115dd
 PKG_RELEASE:=1
 
 PKG_LICENSE_FILES:=LICENSE.qca_firmware
@@ -78,14 +78,14 @@ define Build/Clean
 		$(BUILD_DIR)/$(ATH11K_LEGACY_FW_SUBDIR)
 endef
 
-ifneq ($(CONFIG_PACKAGE_ath11k-firmware-ipq5018)$(CONFIG_PACKAGE_ath11k-firmware-qcn6122),)
+ifneq ($(CONFIG_PACKAGE_ath11k-firmware-ipq5018-qcn6122),)
 $(eval $(call Download,ath11k-legacy-firmware))
 endif
 
 define Build/Prepare
 	$(call Build/Prepare/Default,)
 
-ifneq ($(CONFIG_PACKAGE_ath11k-firmware-ipq5018)$(CONFIG_PACKAGE_ath11k-firmware-qcn6122),)
+ifneq ($(CONFIG_PACKAGE_ath11k-firmware-ipq5018-qcn6122),)
 	$(TAR) -C $(BUILD_DIR) -xf $(DL_DIR)/$(ATH11K_LEGACY_FW_SOURCE)
 endif
 endef

@@ -9,11 +9,12 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ath11k-firmware
 PKG_VERSION_REAL:=2.12-01460
-PKG_VERSION:=$(subst -,.,$(PKG_VERSION_REAL))
+PKG_VERSION:=2025.12.17
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION_REAL).tar.zst
 PKG_SOURCE_URL:=https://github.com/qosmio/upstream-wifi-fw/releases/download/$(PKG_VERSION_REAL)
 PKG_HASH:=a2767b367a51e15c1ab4d303113a0d1e22e73adf727a418119f4509f0ef115dd
 PKG_RELEASE:=1
+PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(subst -,.,$(PKG_VERSION_REAL))
 
 PKG_LICENSE_FILES:=LICENSE.qca_firmware
 

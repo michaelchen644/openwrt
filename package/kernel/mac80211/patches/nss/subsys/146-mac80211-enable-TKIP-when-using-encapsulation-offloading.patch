@@ -1,0 +1,18 @@
+mac80211-enable-TKIP-when-using-encapsulation-offloading
+
+Signed-off-by: Julius Bairaktaris <julius@bairaktaris.de>
+
+diff --git a/net/mac80211/tx.c b/net/mac80211/tx.c
+index 6e1cbef..d645c4d 100644
+--- a/net/mac80211/tx.c
++++ b/net/mac80211/tx.c
+@@ -4743,8 +4743,7 @@ netdev_tx_t ieee80211_subif_start_xmit_8023(struct sk_buff *skb,
+ 	if (!key)
+ 		key = rcu_dereference(sdata->default_unicast_key);
+ 
+-	if (key && (!(key->flags & KEY_FLAG_UPLOADED_TO_HARDWARE) ||
+-		    key->conf.cipher == WLAN_CIPHER_SUITE_TKIP))
++	if (key && (!(key->flags & KEY_FLAG_UPLOADED_TO_HARDWARE)))
+ 		goto skip_offload;
+ 
+ 	sk_pacing_shift_update(skb->sk, sdata->local->hw.tx_sk_pacing_shift);

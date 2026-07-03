@@ -1,0 +1,250 @@
+#!/bin/sh
+# Bring up the full NSS data plane: firmware + ath11k Wi-Fi offload + ECM
+# connection offload + PPPoE connection manager + SQM. Run after boot; a reboot
+# returns the device to the plain host stack.
+#
+# Boot model: ath11k carries symbol dependencies on qca-nss-drv, so the module
+# loader brings qca-nss-drv in at boot - but its probe is deferred by the
+# qca-ppe-nss gate until the data plane is armed. Writing fw_mask boots the
+# firmware synchronously (the glue re-attaches the deferred core devices inside
+# the write), so loading the modules at boot never boots the firmware unarmed.
+set -e
+. /lib/nss/functions.sh
+FWM=/sys/kernel/debug/qca-ppe-nss/fw_mask
+modprobe qca-ppe-nss 2>/dev/null || true
+[ "$(cat $FWM 2>/dev/null)" = "0x0" ] || { echo "already armed or glue missing - reboot first"; exit 1; }
+modprobe qca-nss-drv 2>/dev/null || true
+
+# "all" arms every wired port the board exposes - the glue discovers the
+# per-device DSA port<->if_num map from the live topology, so this works across
+# the ipq807x family (AX3600 resolves to 0x3c, DL-WRX36 to 0x5e, etc.) with no
+# board-specific mask.
+echo all > $FWM
+[ "$(cat $FWM)" != "0x0" ] || { echo "arming failed, fw not booted"; exit 1; }
+# nss-drv hands the armed ports their data plane from a one-shot workqueue
+# after the firmware boots; wait for that registration to reach every armed
+# port instead of guessing with a fixed sleep.
+NARM=$(grep -c 'armed=1' /sys/kernel/debug/qca-ppe-nss/status 2>/dev/null)
+i=0
+while [ $i -lt 20 ]; do
+  [ "$(grep -c 'overridden=1' /sys/kernel/debug/qca-ppe-nss/status 2>/dev/null)" -ge "${NARM:-1}" ] && break
+  i=$((i + 1))
+  sleep 1
+done
+grep 'armed=1' /sys/kernel/debug/qca-ppe-nss/status
+
+# The firmware data plane is armed (the critical section above exits on
+# failure). Everything below - bridge-mgr, qca-mcs, ECM, PPPoE, the Wi-Fi flip,
+# WAN, SQM - is best-effort: a failure here must not abort the script and leave
+# the firmware armed without ECM. ECM hard-depends on qca-mcs
+# (ECM_MULTICAST_ENABLE), so 'modprobe ecm' can fail if qca-mcs is missing -
+# don't let that take down the rest of the plane.
+set +e
+
+# The deferred probe means the NSS queue interrupts and the dev.nss sysctls
+# only exist from this point on - the boot-time S94 qca-nss-drv pass that
+# spreads the N2H queue IRQs across the cores and enables firmware RPS ran
+# before they existed and configured nothing. Re-run it now that they do.
+/etc/init.d/qca-nss-drv start >/dev/null 2>&1
+
+# bridge-mgr: offload Linux-bridge L2 forwarding into the firmware. Load after
+# the data plane is up (ports armed) and before ECM, so the firmware bridge
+# interface exists when ECM classifies bridged flows. On load it walks the
+# existing bridge's members and joins the wired (qca_ppe) ports; Wi-Fi members
+# are skipped until they become NSS interfaces.
+modprobe qca-nss-bridge-mgr 2>/dev/null || true
+
+# vlan-mgr: register 802.1Q upper devices of the armed ports as firmware VLAN
+# interfaces. Without it the firmware untags parsed IP traffic onto the parent
+# port device, so a plain tagged-VLAN WAN (e.g. DHCP on wan.N) never sees its
+# inbound packets. Load after the ports are armed (it resolves the parent
+# device's interface number on the netdev-notifier replay) and before ECM, so
+# connection hierarchies over VLANs bind the firmware VLAN interfaces.
+[ "$(uci -q get nss.general.vlan_mgr)" = "1" ] && modprobe qca-nss-vlan
+
+# qca-mcs: IGMP/MLD membership snooping. ECM's bridged-multicast classifier
+# links against its hooks (mc_bridge_ipv4_get_if etc.), so it must load before
+# ECM for symbol resolution. Same-subnet multicast is hardware-bridged by the
+# kernel bridge IGMP snoop -> switchdev MDB -> qca_ppe, independent of qca-mcs's
+# own replication path (which stays inert here - nothing enables it).
+modprobe qca-mcs 2>/dev/null || true
+
+sysctl -w net.netfilter.nf_conntrack_events=1
+sysctl -w net.netfilter.nf_conntrack_tcp_no_window_check=1
+modprobe ecm front_end_selection=1
+sleep 2
+echo 1 > /sys/kernel/debug/ecm/ecm_classifier_default/accel_delay_pkts
+
+# PPPoE connection-manager offload. Load unconditionally: the manager only
+# learns sessions created after it loads, and gating this on the current
+# network.wan.proto loses the race when the WAN becomes PPPoE only after boot
+# (fresh flash + config restore) - leaving every WAN flow stuck on the host
+# path. It is inert without a PPPoE session, and on images without the module
+# the redirect below swallows the error. The 'ifup wan' further down
+# (re)creates the session after the manager is resident.
+modprobe qca-nss-pppoe 2>/dev/null || true
+
+# Wi-Fi offload: flip nss_offload and rebind the radio so ath11k re-registers
+# against the NSS data path (wifili); pbuf re-applies the 512MB n2h pool tuning
+# and runs `wifi up`. If the radios fail to register, fall back to host-mode
+# Wi-Fi (the recovery/escape path).
+#
+# 802.11s mesh: only the 11.4 NSS firmware line supports mesh interfaces -
+# every newer firmware rejects the mesh dynamic-interface allocation. With a
+# mesh interface configured, take the NSS path only when the firmware is
+# mesh-capable (11.4) AND the image was built with the mesh offload (the
+# Wi-Fi mesh manager module is present); otherwise keep Wi-Fi on the host
+# path - mesh works normally there and all wired offload stays active.
+nss_mesh_state
+mesh_cfg=$NSS_MESH_CFG
+fw_mesh=$NSS_MESH_CAPABLE
+# Radio count is per-board (2 on most ipq807x, 3 on e.g. the AX9000): after
+# the rebind, wait for the same set of phys that existed before it instead of
+# assuming a fixed count.
+nphy=$(ls /sys/class/ieee80211/ 2>/dev/null | wc -l)
+if [ "$mesh_cfg" = 1 ] && [ "$fw_mesh" != 1 ]; then
+  echo "mesh interface configured: Wi-Fi stays on the host path (mesh offload needs the 11.4 NSS firmware and a mesh-enabled build)"
+  # Wi-Fi stays host-mode, so pbuf leaves the NSS auto-scaler enabled and
+  # the cores scale with the wired-offload load on their own.
+  /etc/init.d/qca-nss-pbuf start
+elif [ -w /sys/module/ath11k/parameters/nss_offload ] && [ "$nphy" -gt 0 ]; then
+  [ "$mesh_cfg" = 1 ] && echo "mesh interface configured: 11.4 firmware with mesh offload support, taking the NSS path"
+  wifi down   # tear down hostapd ifaces first (pending-ack WARN at unbind otherwise)
+  sleep 3
+  echo 1 > /sys/module/ath11k/parameters/nss_offload
+  echo c000000.wifi > /sys/bus/platform/drivers/ath11k/unbind
+  sleep 3
+  echo c000000.wifi > /sys/bus/platform/drivers/ath11k/bind
+  # the radios re-register asynchronously after the rebind - wait for them
+  i=0
+  while [ $i -lt 15 ]; do
+    [ "$(ls /sys/class/ieee80211/ 2>/dev/null | wc -l)" -ge "$nphy" ] && break
+    i=$((i + 1))
+    sleep 1
+  done
+  if [ "$(ls /sys/class/ieee80211/ 2>/dev/null | wc -l)" -lt "$nphy" ]; then
+    echo "WIFI OFFLOAD FAILED - falling back to host-mode wifi"
+    echo 0 > /sys/module/ath11k/parameters/nss_offload
+    echo c000000.wifi > /sys/bus/platform/drivers/ath11k/unbind 2>/dev/null
+    sleep 3
+    echo c000000.wifi > /sys/bus/platform/drivers/ath11k/bind
+    i=0
+    while [ $i -lt 12 ]; do
+      [ "$(ls /sys/class/ieee80211/ 2>/dev/null | wc -l)" -ge "$nphy" ] && break
+      i=$((i + 1))
+      sleep 1
+    done
+  fi
+  # pbuf applies the memory-profile n2h tuning and, with the auto-scaler
+  # disabled (pbuf.opt.auto_scale=0), pins the NSS cores at max frequency.
+  /etc/init.d/qca-nss-pbuf start
+else
+  # No registered radios to flip (or no NSS-capable ath11k) - Wi-Fi, if any,
+  # stays on the host path; still apply the pbuf n2h/clock tuning for the
+  # wired offload.
+  /etc/init.d/qca-nss-pbuf start
+fi
+
+# Firmware RPS hashes host-terminated flows onto N2H queue 0, whose NAPI
+# runs on core 0 - without further spreading, all local receive processing
+# (TCP to the router itself, wifili exceptions) serializes there. Fan the
+# receive softirq work out to the other cores with Linux RPS on the
+# delivery netdevs: every bridge (whatever its name) plus the Wi-Fi VAPs
+# (which exist only after the Wi-Fi stage above). Mask 'e' = cores 1-3;
+# every ipq807x is a quad A53.
+for br in /sys/class/net/*/bridge; do
+  q="${br%/bridge}/queues/rx-0/rps_cpus"
+  [ -w "$q" ] && echo e > "$q"
+done
+for q in /sys/class/net/phy*-ap*/queues/rx-0/rps_cpus; do
+  [ -w "$q" ] && echo e > "$q"
+done
+
+# WAN + SQM bring-up is best-effort with retries (set +e is in effect).
+# Identify the WAN interface from the live default route (any section name
+# works); only when the WAN is down at this point fall back to the
+# conventional logical name 'wan'.
+. /lib/functions/network.sh
+network_find_wan wan_iface
+[ -n "$wan_iface" ] || wan_iface=wan
+ifup "$wan_iface"
+
+# Wait for the WAN to obtain an L3 address before flushing conntrack and
+# reporting: WAN negotiation (PPPoE especially) takes seconds, and the SQM
+# outcome below can only be judged once the ifup completed. Poll the real
+# L3 device for up to ~60s.
+# The L3 device (pppoe-wan for a PPPoE WAN, the DHCP/static device otherwise)
+# only exists once the interface is up, so re-derive it every iteration instead
+# of sampling it once before the WAN has negotiated.
+i=0
+while [ $i -lt 30 ]; do
+  wan_dev=$(ifstatus "$wan_iface" 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null)
+  if [ -n "$wan_dev" ] \
+     && { ip -4 addr show dev "$wan_dev" 2>/dev/null | grep -q "inet " \
+          || ip -6 addr show dev "$wan_dev" scope global 2>/dev/null | grep -q "inet6 "; }; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 2
+done
+[ -n "$wan_dev" ] || wan_dev=$wan_iface
+if [ $i -lt 30 ]; then
+  echo "$wan_dev has an IP after ~$((i * 2))s"
+else
+  echo "WARN: $wan_dev still has no IP after 60s; starting SQM anyway"
+fi
+
+# let the link settle, then flush conntrack/ECM so flows re-accelerate cleanly
+sleep 3
+echo 1 > /sys/kernel/debug/ecm/ecm_db/defunct_all 2>/dev/null
+echo f > /proc/net/nf_conntrack 2>/dev/null
+echo "NSS+wifi+ECM up. accel counts: v4=$(cat /sys/kernel/debug/ecm/ecm_nss_ipv4/accelerated_count 2>/dev/null) v6=$(cat /sys/kernel/debug/ecm/ecm_nss_ipv6/accelerated_count 2>/dev/null)"
+
+# --- Optional offloads (NOT enabled in the default image) ------------------
+# Routed (L3) multicast, e.g. IPTV WAN->LAN. To enable it in a fork: add a
+# multicast-routing daemon to the build (CONFIG_PACKAGE_igmpproxy=y or smcroute),
+# ship your own /etc/config for it, disable its boot autostart so it starts only
+# here (after pppoe-wan has an address), and uncomment the line below. ECM
+# (ECM_MULTICAST_ENABLE, already on) then turns each kernel MFC entry the daemon
+# installs into a PPE hardware rule. See docs/CUSTOMIZE.md.
+# [ -x /usr/sbin/igmpproxy ] && /etc/init.d/igmpproxy start 2>/dev/null || true
+#
+# The other build-verified extras (nat46/MAP-T, vxlan, macvlan, gre) need no
+# bring-up step here - ECM offloads them automatically once their kmod and
+# interface exist.
+# ---------------------------------------------------------------------------
+
+# SQM starts from the iface hotplug on the 'ifup wan' above: sqm-scripts'
+# own 11-sqm covers sections shaping the L3 netdev, the 12-nss-sqm hotplug
+# (sqm-scripts-nss) covers sections shaping a lower device of the WAN stack
+# (the physical port, where the NSS shaper sits). Just report the outcome.
+if /etc/init.d/sqm enabled; then
+  nss_sqm_section
+  if [ -z "$NSS_SQM_DEV" ]; then
+    echo "sqm service enabled but no queue section found"
+  else
+  j=0
+  while [ $j -lt 8 ]; do
+    tc qdisc show dev "$NSS_SQM_DEV" 2>/dev/null | grep -q nsstbl && break
+    j=$((j + 1))
+    sleep 2
+  done
+  if tc qdisc show dev "$NSS_SQM_DEV" 2>/dev/null | grep -q nsstbl; then
+    echo "SQM active on $NSS_SQM_DEV"
+  else
+    echo "WARN: SQM not attached on $NSS_SQM_DEV (logread | grep -i sqm)"
+  fi
+  # Report the per-port upload IGS trees (the section's igs_upload option).
+  for p in $(uci -q get "sqm.${NSS_SQM_SEC}.igs_upload"); do
+    if tc qdisc show dev "ifb-$p" 2>/dev/null | grep -q nsstbl; then
+      echo "upload IGS active: $p -> ifb-$p"
+    else
+      echo "WARN: upload IGS tree missing on ifb-$p (logread | grep upload_igs)"
+    fi
+  done
+  fi
+fi
+
+# Late VAP netdevs (hostapd on a busy boot) are handled by the 30-nss-rps net
+# hotplug on their 'add' event; no second eager pass needed here.
+exit 0

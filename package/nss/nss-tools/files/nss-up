@@ -20,8 +20,17 @@ modprobe qca-nss-drv 2>/dev/null || true
 # board-specific mask.
 echo all > $FWM
 [ "$(cat $FWM)" != "0x0" ] || { echo "arming failed, fw not booted"; exit 1; }
-sleep 8
-grep -E "if_num [2-5]:" /sys/kernel/debug/qca-ppe-nss/status
+# nss-drv hands the armed ports their data plane from a one-shot workqueue
+# after the firmware boots; wait for that registration to reach every armed
+# port instead of guessing with a fixed sleep.
+NARM=$(grep -c 'armed=1' /sys/kernel/debug/qca-ppe-nss/status 2>/dev/null)
+i=0
+while [ $i -lt 20 ]; do
+  [ "$(grep -c 'overridden=1' /sys/kernel/debug/qca-ppe-nss/status 2>/dev/null)" -ge "${NARM:-1}" ] && break
+  i=$((i + 1))
+  sleep 1
+done
+grep 'armed=1' /sys/kernel/debug/qca-ppe-nss/status
 
 # The firmware data plane is armed (the critical section above exits on
 # failure). Everything below - bridge-mgr, qca-mcs, ECM, PPPoE, the Wi-Fi flip,
@@ -64,27 +73,69 @@ modprobe qca-nss-pppoe 2>/dev/null || true
 # against the NSS data path (wifili); pbuf re-applies the 512MB n2h pool tuning
 # and runs `wifi up`. If the radios fail to register, fall back to host-mode
 # Wi-Fi (the recovery/escape path).
-if [ -w /sys/module/ath11k/parameters/nss_offload ]; then
+#
+# 802.11s mesh: only the 11.4 NSS firmware line supports mesh interfaces -
+# every newer firmware rejects the mesh dynamic-interface allocation. With a
+# mesh interface configured, take the NSS path only when the firmware is
+# mesh-capable (11.4) AND the image was built with the mesh offload (the
+# Wi-Fi mesh manager module is present); otherwise keep Wi-Fi on the host
+# path - mesh works normally there and all wired offload stays active.
+mesh_cfg=0
+uci -q show wireless | grep -q "\.mode='mesh'" && mesh_cfg=1
+fw_mesh=0
+# qca-nss0.bin is a symlink the firmware hotplug script creates on the first
+# arm; on a freshly flashed image it does not exist yet - fall back to the
+# packaged retail blob name.
+fw_blob=/lib/firmware/qca-nss0.bin
+[ -e "$fw_blob" ] || fw_blob=/lib/firmware/qca-nss0-retail.bin
+case "$(grep -aom1 'NSS\.[A-Z][A-Z]*\.[0-9][0-9a-zA-Z.-]*' "$fw_blob" 2>/dev/null)" in
+  *.11.4.*) [ -e "/lib/modules/$(uname -r)/qca-nss-wifi-meshmgr.ko" ] && fw_mesh=1 ;;
+esac
+# Radio count is per-board (2 on most ipq807x, 3 on e.g. the AX9000): after
+# the rebind, wait for the same set of phys that existed before it instead of
+# assuming a fixed count.
+nphy=$(ls /sys/class/ieee80211/ 2>/dev/null | wc -l)
+if [ "$mesh_cfg" = 1 ] && [ "$fw_mesh" != 1 ]; then
+  echo "mesh interface configured: Wi-Fi stays on the host path (mesh offload needs the 11.4 NSS firmware and a mesh-enabled build)"
+  # Wi-Fi stays host-mode, so pbuf leaves the NSS auto-scaler enabled and
+  # the cores scale with the wired-offload load on their own.
+  /etc/init.d/qca-nss-pbuf start
+elif [ -w /sys/module/ath11k/parameters/nss_offload ] && [ "$nphy" -gt 0 ]; then
+  [ "$mesh_cfg" = 1 ] && echo "mesh interface configured: 11.4 firmware with mesh offload support, taking the NSS path"
   wifi down   # tear down hostapd ifaces first (pending-ack WARN at unbind otherwise)
   sleep 3
   echo 1 > /sys/module/ath11k/parameters/nss_offload
   echo c000000.wifi > /sys/bus/platform/drivers/ath11k/unbind
   sleep 3
   echo c000000.wifi > /sys/bus/platform/drivers/ath11k/bind
-  sleep 12
-  if [ "$(ls /sys/class/ieee80211/ 2>/dev/null | wc -l)" -lt 2 ]; then
+  # the radios re-register asynchronously after the rebind - wait for them
+  i=0
+  while [ $i -lt 15 ]; do
+    [ "$(ls /sys/class/ieee80211/ 2>/dev/null | wc -l)" -ge "$nphy" ] && break
+    i=$((i + 1))
+    sleep 1
+  done
+  if [ "$(ls /sys/class/ieee80211/ 2>/dev/null | wc -l)" -lt "$nphy" ]; then
     echo "WIFI OFFLOAD FAILED - falling back to host-mode wifi"
     echo 0 > /sys/module/ath11k/parameters/nss_offload
     echo c000000.wifi > /sys/bus/platform/drivers/ath11k/unbind 2>/dev/null
     sleep 3
     echo c000000.wifi > /sys/bus/platform/drivers/ath11k/bind
-    sleep 10
+    i=0
+    while [ $i -lt 12 ]; do
+      [ "$(ls /sys/class/ieee80211/ 2>/dev/null | wc -l)" -ge "$nphy" ] && break
+      i=$((i + 1))
+      sleep 1
+    done
   fi
+  # pbuf applies the memory-profile n2h tuning and, with the auto-scaler
+  # disabled (pbuf.opt.auto_scale=0), pins the NSS cores at max frequency.
   /etc/init.d/qca-nss-pbuf start
-  # Pin the NSS cores at their top frequency: the pbuf service disables the
-  # boot-time auto-scaler, which otherwise leaves the clock frozen at whatever
-  # step the boot-time load had reached.
-  sysctl -w dev.nss.clock.current_freq=1689600000 >/dev/null 2>&1 || true
+else
+  # No registered radios to flip (or no NSS-capable ath11k) - Wi-Fi, if any,
+  # stays on the host path; still apply the pbuf n2h/clock tuning for the
+  # wired offload.
+  /etc/init.d/qca-nss-pbuf start
 fi
 
 # WAN + SQM bring-up is best-effort with retries (set +e is in effect).
@@ -144,6 +195,7 @@ echo "NSS+wifi+ECM up. accel counts: v4=$(cat /sys/kernel/debug/ecm/ecm_nss_ipv4
 
 # Start SQM, retrying until the NSS shaper actually attaches to wan (check_addr
 # can still lose a race in the first moments after the IP appears).
+#
 if /etc/init.d/sqm enabled; then
   # The NSS shaper lands on the device named by the SQM queue section's
   # 'interface' option. Resolve that section by TYPE, not by name (the

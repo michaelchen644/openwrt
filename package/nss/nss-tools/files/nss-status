@@ -21,8 +21,24 @@ mod() { [ -d "/sys/module/$1" ] && echo 1 || echo 0; }
 
 # --- collect ---------------------------------------------------------------
 
-fw_version=$(grep -aom1 'NSS\.FW\.[0-9A-Za-z.-]*' /lib/firmware/qca-nss0.bin 2>/dev/null)
+# Match both version-string shapes: NSS.FW.12.5-210-HK.R (12.x line) and
+# NSS.HK.11.4.0.5-6-R (11.4 line, the mesh-capable firmware).
+# qca-nss0.bin only exists after the first firmware arm (hotplug symlink);
+# fall back to the packaged retail blob name on a fresh image.
+fw_blob=/lib/firmware/qca-nss0.bin
+[ -e "$fw_blob" ] || fw_blob=/lib/firmware/qca-nss0-retail.bin
+fw_version=$(grep -aom1 'NSS\.[A-Z][A-Z]*\.[0-9][0-9A-Za-z.-]*' "$fw_blob" 2>/dev/null)
 [ -n "$fw_version" ] || fw_version="unknown"
+
+# 802.11s mesh state: configured = any wireless vif in mesh mode; capable =
+# mesh-capable firmware (11.4 line) plus a mesh-enabled build (Wi-Fi mesh
+# manager module present). Mirrors the nss-up decision.
+mesh_cfg=0
+uci -q show wireless | grep -q "\.mode='mesh'" && mesh_cfg=1
+mesh_capable=0
+case "$fw_version" in
+	*.11.4.*) [ -e "/lib/modules/$(uname -r)/qca-nss-wifi-meshmgr.ko" ] && mesh_capable=1 ;;
+esac
 
 fw_mask=$(cat "$GLUE/fw_mask" 2>/dev/null)
 [ -n "$fw_mask" ] || fw_mask="0x0"
@@ -131,6 +147,7 @@ if [ "$JSON" = 1 ]; then
 	"ecm":{"loaded":$ecm_loaded,"ipv4_accel":$ecm_v4,"ipv6_accel":$ecm_v6},
 	"modules":{"bridge_mgr":$bridge_mgr,"mcs":$mcs,"pppoe":$pppoe_mgr},
 	"wifi_offload":$wifi_offload,
+	"mesh":{"configured":$mesh_cfg,"fw_capable":$mesh_capable},
 	"kernel_log":{"warns":$kwarns,"oopses":$koops},
 	"sqm":{"active":$sqm_active,"device":"$sqm_dev","igs":$ijson,
 	"fastlane":{"active":$fl_active,"egress_pkts":${fl_egress:-0},"ingress_pkts":${fl_ingress:-0}},
@@ -181,8 +198,18 @@ fi
 echo "  ECM:         loaded=$ecm_loaded, accelerated: $ecm_v4 IPv4 / $ecm_v6 IPv6"
 echo "  modules:     bridge-mgr=$bridge_mgr qca-mcs=$mcs pppoe-mgr=$pppoe_mgr"
 case "$wifi_offload" in
-	1)  echo "  Wi-Fi:       NSS offload active (wifili)" ;;
-	0)  echo "  Wi-Fi:       host mode" ;;
+	1)  if [ "$mesh_cfg" = 1 ]; then
+	        echo "  Wi-Fi:       NSS offload active (wifili, 802.11s mesh offloaded)"
+	    else
+	        echo "  Wi-Fi:       NSS offload active (wifili)"
+	    fi ;;
+	0)  if [ "$mesh_cfg" = 1 ] && [ "$mesh_capable" = 1 ]; then
+	        echo "  Wi-Fi:       host mode (mesh configured; firmware supports mesh offload - armed by nss-up)"
+	    elif [ "$mesh_cfg" = 1 ]; then
+	        echo "  Wi-Fi:       host mode (mesh configured; mesh offload needs the 11.4 NSS firmware and a mesh-enabled build)"
+	    else
+	        echo "  Wi-Fi:       host mode"
+	    fi ;;
 	*)  echo "  Wi-Fi:       ath11k not loaded" ;;
 esac
 if [ "$sqm_active" = 1 ]; then

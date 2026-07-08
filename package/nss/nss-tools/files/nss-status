@@ -10,9 +10,11 @@ ECM=/sys/kernel/debug/ecm
 
 JSON=0
 DEBUG=0
+L2=0
 case "$1" in
 	-j) JSON=1 ;;
 	-d|--debug) DEBUG=1 ;;
+	-l2) L2=1 ;;
 esac
 
 mod() { [ -d "/sys/module/$1" ] && echo 1 || echo 0; }
@@ -151,6 +153,31 @@ if [ "$JSON" = 1 ]; then
 	"fastlane":{"active":$fl_active,"egress_pkts":${fl_egress:-0},"ingress_pkts":${fl_ingress:-0}},
 	"qos_marking_rules":$qos_rules}}
 	EOF
+	exit 0
+fi
+
+# --- L2 per-port datapath view (-l2) ---------------------------------------
+# host<->fw<->wire counters per offloaded port. The pointer that localises an
+# egress stall: a link-up port whose host->fw (glue tx_redirect) climbs while
+# the client stays unreachable is not putting frames on the wire.
+if [ "$L2" = 1 ]; then
+	edp=/sys/kernel/debug/qca-nss-drv/stats/edma/ports
+	echo "NSS L2 per-port datapath:"
+	printf "  %-6s %-4s %-4s %-4s %13s %12s %12s %12s\n" port ifn car vsi "host->fw" "fw->host" "wire->fw" "fw->wire"
+	for pn in 2 3 4 5; do
+		line=$(grep "if_num $pn:" "$GLUE/status" 2>/dev/null)
+		nd=$(echo "$line" | sed -n 's/.*netdev=\([^ ]*\).*/\1/p')
+		[ -z "$nd" ] || [ "$nd" = "-" ] && continue
+		vsi=$(echo "$line" | sed -n 's/.*fw_vsi=\([^ ]*\).*/\1/p')
+		txr=$(echo "$line" | sed -n 's/.*tx_redirect_pkts=\([^ ]*\).*/\1/p')
+		rxf=$(echo "$line" | sed -n 's/.*rx_fw_pkts=\([^ ]*\).*/\1/p')
+		car=$(cat "/sys/class/net/$nd/carrier" 2>/dev/null)
+		etx=$(cat "$edp/$pn"/* 2>/dev/null | awk '/tx_pkts/{print $3}')
+		erx=$(cat "$edp/$pn"/* 2>/dev/null | awk '/rx_pkts/{print $3}')
+		printf "  %-6s %-4s %-4s %-4s %13s %12s %12s %12s\n" "$nd" "$pn" "${car:-?}" "${vsi:-?}" "${txr:-?}" "${rxf:-?}" "${etx:-?}" "${erx:-?}"
+	done
+	echo "  host->fw=glue tx_redirect  fw->host=glue rx_fw  wire->fw=edma ingress  fw->wire=edma egress"
+	echo "  link-up + host->fw climbing + client unreachable => egress stall (see /root/wedge-captures)"
 	exit 0
 fi
 

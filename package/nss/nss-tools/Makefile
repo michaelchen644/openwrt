@@ -17,7 +17,7 @@ define Package/nss-tools
   DEPENDS:=@(TARGET_qualcommax) +kmod-qca-ppe-nss +kmod-qca-nss-drv \
 	+kmod-qca-nss-ecm +kmod-qca-nss-drv-pppoe +kmod-qca-nss-drv-bridge-mgr \
 	+kmod-qca-mcs +kmod-qca-nss-drv-qdisc +kmod-qca-nss-drv-igs \
-	+sqm-scripts-nss
+	+sqm-scripts-nss +ethtool +ip-bridge
   PKGARCH:=all
 endef
 

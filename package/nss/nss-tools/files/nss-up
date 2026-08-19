@@ -18,7 +18,7 @@ set -e
   [ -f "/lib/modules/$(uname -r)/modules.dep" ] ||
   echo "WARN: modprobe cannot resolve module names here (the 'kmod' package replaced kmodloader and there is no modules.dep) - remove the 'kmod' package or run 'depmod -a'"
 FWM=/sys/kernel/debug/qca-ppe-nss/fw_mask
-[ "$(cat $FWM 2>/dev/null || echo 0x0)" != "0x0" ] || { echo "data plane not armed (the nss init service arms it before netifd) - nothing to do"; exit 1; }
+[ "$(cat $FWM 2>/dev/null || echo 0x0)" != "0x0" ] || { echo "data plane not armed (the nss init service arms it before netifd) - nothing to do"; service igmpproxy restart; service daed restart; exit 1; }
 # nss-drv hands the armed ports their data plane from a one-shot workqueue
 # after the firmware boots; wait for that registration to reach every armed
 # port instead of guessing with a fixed sleep.
@@ -193,7 +193,7 @@ fi
 # here (after pppoe-wan has an address), and uncomment the line below. ECM
 # (ECM_MULTICAST_ENABLE, already on) then turns each kernel MFC entry the daemon
 # installs into a PPE hardware rule. See docs/CUSTOMIZE.md.
-# [ -x /usr/sbin/igmpproxy ] && /etc/init.d/igmpproxy start 2>/dev/null || true
+[ -x /usr/sbin/igmpproxy ] && /etc/init.d/igmpproxy restart 2>/dev/null || true
 #
 # The other build-verified extras (nat46/MAP-T, vxlan, macvlan, gre) need no
 # bring-up step here - ECM offloads them automatically once their kmod and
@@ -243,5 +243,8 @@ fi
 # it must never fail a bring-up.
 nss-ppe-diff save >/dev/null 2>&1 ||
   echo "WARN: could not baseline the PPE registers (nss-ppe-diff save)"
+
+# Start Daed
+service daed restart
 
 exit 0

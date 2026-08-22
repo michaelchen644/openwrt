@@ -5,6 +5,8 @@
 
 #include <linux/bitfield.h>
 #include <linux/bitmap.h>
+#include <linux/cleanup.h>
+#include <linux/mutex.h>
 #include <linux/regmap.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
@@ -524,6 +526,13 @@ struct qca_ppe_priv {
 	struct clk_bulk_data *clks;
 	int num_clks;
 	spinlock_t fdb_lock;
+	/* Guards the FDB and the tables the operation engine reaches. */
+	struct mutex flow_lock;
+	/* The VSI, translation-index and bridge-VLAN state is reached from the
+	 * switchdev ops under rtnl and from a workqueue, which holds none.
+	 * Taken after flow_lock wherever both are needed.
+	 */
+	struct mutex vlan_lock;
 	DECLARE_BITMAP(vsi_bitmap, PPE_VSI_MAX);
 	DECLARE_BITMAP(xlt_bitmap, PPE_XLT_TBL_NUM);
 	u32 port_vsi[QCA_PPE_MAX_PORTS];
@@ -566,6 +575,8 @@ int qca_ppe_vlan_setup(struct dsa_switch *ds);
 int qca_ppe_port_vlan_filtering(struct dsa_switch *ds, int port,
 				bool vlan_filtering,
 				struct netlink_ext_ack *extack);
+struct qca_ppe_vlan_entry *
+ppe_vlan_find(struct qca_ppe_priv *priv, struct net_device *br_dev, u16 vid);
 int qca_ppe_port_vlan_add(struct dsa_switch *ds, int port,
 			  const struct switchdev_obj_port_vlan *vlan,
 			  struct netlink_ext_ack *extack);

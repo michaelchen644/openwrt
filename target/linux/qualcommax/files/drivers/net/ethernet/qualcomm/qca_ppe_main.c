@@ -1804,6 +1804,7 @@ static int ppe_ipq6018_mux_setup(struct qca_ppe_priv *priv)
 			continue;
 
 		port3_ch = pcs_args.args[0];
+		of_node_put(pcs_args.np);
 	}
 
 	of_node_put(ports_np);
@@ -1859,12 +1860,16 @@ static int qca_ppe_probe(struct platform_device *pdev)
 		return ret;
 
 	base = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(base))
-		return dev_err_probe(&pdev->dev, PTR_ERR(base), "failed to ioremap resource");
+	if (IS_ERR(base)) {
+		ret = dev_err_probe(&pdev->dev, PTR_ERR(base), "failed to ioremap resource");
+		goto err_clk;
+	}
 
 	priv->regmap = devm_regmap_init_mmio(&pdev->dev, base, &ppe_regmap_cfg);
-	if (IS_ERR(priv->regmap))
-		return dev_err_probe(&pdev->dev, PTR_ERR(priv->regmap), "failed to init regmap");
+	if (IS_ERR(priv->regmap)) {
+		ret = dev_err_probe(&pdev->dev, PTR_ERR(priv->regmap), "failed to init regmap");
+		goto err_clk;
+	}
 
 	rst = devm_reset_control_get(&pdev->dev, "ppe_rst");
 	if (IS_ERR(rst)) {

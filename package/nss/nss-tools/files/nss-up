@@ -7,6 +7,13 @@
 # reboot with nss.general.enabled='0' returns the device to the host stack.
 set -e
 . /lib/nss/functions.sh
+. /lib/functions/network.sh
+
+network_find_wan wan_iface || true
+network_find_wan6 wan6_iface || true
+[ -n "$wan_iface" ] || wan_iface=wan
+[ -n "$wan6_iface" ] || wan6_iface=wan_6
+
 # Every stage here loads its module by name. Stock OpenWrt answers modprobe with
 # ubox's kmodloader, which resolves a name by scanning /lib/modules and follows
 # each module's own depends= list. The optional 'kmod' package takes /sbin/modprobe
@@ -18,7 +25,7 @@ set -e
   [ -f "/lib/modules/$(uname -r)/modules.dep" ] ||
   echo "WARN: modprobe cannot resolve module names here (the 'kmod' package replaced kmodloader and there is no modules.dep) - remove the 'kmod' package or run 'depmod -a'"
 FWM=/sys/kernel/debug/qca-ppe-nss/fw_mask
-[ "$(cat $FWM 2>/dev/null || echo 0x0)" != "0x0" ] || { echo "data plane not armed (the nss init service arms it before netifd) - nothing to do"; exit 1; }
+[ "$(cat $FWM 2>/dev/null || echo 0x0)" != "0x0" ] || { echo "data plane not armed (the nss init service arms it before netifd) - nothing to do"; ifup "$wan_iface"; ifup "$wan6_iface"; exit 1; }
 # nss-drv hands the armed ports their data plane from a one-shot workqueue
 # after the firmware boots; wait for that registration to reach every armed
 # port instead of guessing with a fixed sleep.
@@ -137,10 +144,8 @@ fi
 # Identify the WAN interface from the live default route (any section name
 # works); only when the WAN is down at this point fall back to the
 # conventional logical name 'wan'.
-. /lib/functions/network.sh
-network_find_wan wan_iface
-[ -n "$wan_iface" ] || wan_iface=wan
 ifup "$wan_iface"
+ifup "$wan6_iface"
 
 # Wait for the WAN to obtain an L3 address before flushing conntrack and
 # reporting: WAN negotiation (PPPoE especially) takes seconds, and the SQM

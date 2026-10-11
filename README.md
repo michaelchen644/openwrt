@@ -1,5 +1,11 @@
 # OpenWrt with NSS hardware offload for IPQ807x and IPQ60xx
 
+> [!IMPORTANT]
+> This branch is archived. It carried the vendor NSS stack (qca-nss-drv,
+> ECM, NSS qdiscs) and is no longer updated or built. The default branch is
+> now [`ppe-nss`](https://github.com/JuliusBairaktaris/openwrt-ppe-nss/tree/ppe-nss).
+> The final state is the `archive/nss-edma-rework-final` tag.
+
 This is OpenWrt main with Qualcomm NSS hardware offload for IPQ807x and
 IPQ60xx (IPQ6018) routers, such as the Xiaomi AX3600, Redmi AX6, Linksys
 MX4300 and MR7350, and GL.iNet GL-AX1800. The NSS firmware runs on top of

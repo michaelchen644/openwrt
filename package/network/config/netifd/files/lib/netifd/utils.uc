@@ -12,13 +12,9 @@ export function parse_bool(val)
 	switch (val) {
 	case "1":
 	case "true":
-	case true:
-	case 1:
 		return true;
 	case "0":
 	case "false":
-	case false:
-	case 0:
 		return false;
 	}
 };
